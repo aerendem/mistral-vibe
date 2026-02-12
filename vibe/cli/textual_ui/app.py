@@ -125,6 +125,8 @@ class VibeApp(App):  # noqa: PLR0904
         Binding(
             "shift+down", "scroll_chat_down", "Scroll Down", show=False, priority=True
         ),
+        Binding("ctrl+y", "toggle_memory", "Toggle Memory", show=False),
+        Binding("ctrl+u", "show_memory", "Show Memory", show=False),
     ]
 
     def __init__(
@@ -962,6 +964,80 @@ class VibeApp(App):  # noqa: PLR0904
             if result.tool_name == "todo":
                 await result.set_collapsed(self._todos_collapsed)
 
+    async def action_toggle_memory(self) -> None:
+        mm = self.agent_loop.memory_manager
+        mm.enabled = not mm.enabled
+        state = "ON" if mm.enabled else "OFF"
+        msg = f"Memory: **{state}**"
+        if not mm.enabled:
+            m = mm.metrics
+            msg += (
+                f"\n\nSession stats: {m.observations_stored} stored, "
+                f"{m.reflections_triggered} reflections, "
+                f"{m.injections_served} injections"
+            )
+        await self._mount_and_scroll(UserCommandMessage(msg))
+
+    async def action_show_memory(self) -> None:
+        await self._show_memory()
+
+    async def _show_memory(self) -> None:
+        mm = self.agent_loop.memory_manager
+        if not mm.enabled or not mm._store:
+            await self._mount_and_scroll(
+                UserCommandMessage("Memory is **disabled**.")
+            )
+            return
+
+        m = mm.metrics
+        user_id = mm._user_id
+        ctx_key = mm.get_context_key()
+        state = mm._store.get_or_create_user_state(user_id)
+        ctx = mm._store.get_or_create_context_memory(ctx_key, user_id)
+
+        seed_summary = state.seed.format_summary() or "(empty)"
+        if state.fields:
+            fields_text = "\n".join(
+                f"- **{f.key}**: {f.value}" for f in state.fields
+            )
+        else:
+            fields_text = "(none)"
+
+        block = mm.get_memory_block()
+        block_text = f"```xml\n{block}\n```" if block else "(empty)"
+
+        text = f"""## Memory State
+
+**Status**: Enabled
+**User**: {user_id}
+**Context**: {ctx_key}
+
+### Session Metrics
+- Observations stored: {m.observations_stored}
+- Skipped (trivial): {m.observations_skipped_trivial}
+- Skipped (low entropy): {m.observations_skipped_low_entropy}
+- Skipped (dedup): {m.observations_skipped_dedup}
+- Skipped (low score): {m.observations_skipped_low_score}
+- Reflections triggered: {m.reflections_triggered}
+- Injections served: {m.injections_served}
+
+### User Profile (Seed)
+{seed_summary}
+
+### User Fields
+{fields_text}
+
+### Context Memory
+- Sensory buffer: {len(ctx.sensory)} items
+- Short-term: {len(ctx.short_term)} items
+- Long-term: {len(ctx.long_term)} chars
+- Consolidations: {ctx.consolidation_count}
+
+### Current Injection Block
+{block_text}"""
+
+        await self._mount_and_scroll(UserCommandMessage(text))
+
     def action_cycle_mode(self) -> None:
         if self._current_bottom_app != BottomApp.Input:
             return
@@ -1001,7 +1077,27 @@ class VibeApp(App):  # noqa: PLR0904
         if self._agent_task and not self._agent_task.done():
             self._agent_task.cancel()
 
+        self.run_worker(
+            self._shutdown_and_exit(),
+            group="app_shutdown",
+            exclusive=True,
+        )
+
+    async def _shutdown_and_exit(self) -> None:
+        await self._flush_memory_on_shutdown()
         self.exit(result=self._get_session_resume_info())
+
+    async def _flush_memory_on_shutdown(self) -> None:
+        if not hasattr(self, "agent_loop"):
+            return
+        mm = self.agent_loop.memory_manager
+        if not mm.enabled:
+            return
+        try:
+            await mm.on_session_end()
+            await mm.aclose()
+        except Exception:
+            logger.warning("Memory shutdown flush failed", exc_info=True)
 
     def action_scroll_chat_up(self) -> None:
         try:

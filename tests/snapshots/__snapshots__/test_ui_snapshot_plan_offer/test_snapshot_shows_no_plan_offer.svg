@@ -33,13 +33,13 @@
     }
 
     .terminal-r1 { fill: #c5c8c6 }
-.terminal-r2 { fill: #3c3836 }
-.terminal-r3 { fill: #fbf1c7 }
+.terminal-r2 { fill: #393939 }
+.terminal-r3 { fill: #f0f0f0 }
 .terminal-r4 { fill: #a9a9a9 }
-.terminal-r5 { fill: #a6a087 }
-.terminal-r6 { fill: #85a598;font-weight: bold }
+.terminal-r5 { fill: #9f9f9f }
+.terminal-r6 { fill: #9d9d9d;font-weight: bold }
 .terminal-r7 { fill: #7e7e7e }
-.terminal-r8 { fill: #85a598 }
+.terminal-r8 { fill: #9d9d9d }
     </style>
 
     <defs>

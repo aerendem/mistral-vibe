@@ -107,8 +107,11 @@ class Task(
                 f"This is a security constraint to prevent recursive spawning."
             )
 
+        from vibe.core.memory.config import MemoryConfig
+
         base_config = VibeConfig.load(
-            session_logging=SessionLoggingConfig(enabled=False)
+            session_logging=SessionLoggingConfig(enabled=False),
+            memory=MemoryConfig(enabled=False),
         )
         subagent_loop = AgentLoop(config=base_config, agent_name=args.agent)
 
