@@ -30,6 +30,7 @@ from vibe.core.middleware import (
     ResetReason,
     TurnLimitMiddleware,
 )
+from vibe.core.memory import MemoryManager
 from vibe.core.prompts import UtilityPrompt
 from vibe.core.session.session_logger import SessionLogger
 from vibe.core.session.session_migration import migrate_sessions_entrypoint
@@ -102,6 +103,35 @@ def _should_raise_rate_limit_error(e: Exception) -> bool:
     return isinstance(e, BackendError) and e.status == HTTPStatus.TOO_MANY_REQUESTS
 
 
+class _MemoryObserverMiddleware:
+    """Observes user messages for memory scoring via write queue."""
+
+    def __init__(self, memory_manager: MemoryManager) -> None:
+        self._memory_manager = memory_manager
+        self._observe_assistant = memory_manager.config.observe_assistant
+        self._last_observed_idx = 0
+
+    async def before_turn(self, context: ConversationContext) -> MiddlewareResult:
+        return MiddlewareResult()
+
+    async def after_turn(self, context: ConversationContext) -> MiddlewareResult:
+        for msg in context.messages[self._last_observed_idx :]:
+            if msg.role == Role.user and msg.content:
+                self._memory_manager.enqueue_observe(msg.content, "user")
+            elif (
+                self._observe_assistant
+                and msg.role == Role.assistant
+                and isinstance(msg.content, str)
+                and len(msg.content) > 100
+            ):
+                self._memory_manager.enqueue_observe(msg.content, "assistant")
+        self._last_observed_idx = len(context.messages)
+        return MiddlewareResult()
+
+    def reset(self, reset_reason: ResetReason = ResetReason.STOP) -> None:
+        self._last_observed_idx = 0
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -130,6 +160,10 @@ class AgentLoop:
         self.message_observer = message_observer
         self._last_observed_message_index: int = 0
         self.enable_streaming = enable_streaming
+
+        # Memory system (must be created before middleware setup)
+        self.memory_manager = self._create_memory_manager()
+
         self.middleware_pipeline = MiddlewarePipeline()
         self._setup_middleware()
 
@@ -176,6 +210,53 @@ class AgentLoop:
     @property
     def auto_approve(self) -> bool:
         return self.config.auto_approve
+
+    def _create_memory_manager(self) -> MemoryManager:
+        return MemoryManager(
+            config=self._base_config.memory,
+            llm_caller=self._memory_llm_call,
+        )
+
+    async def _memory_llm_call(self, system_prompt: str, user_prompt: str) -> str:
+        """Make a simple LLM call for memory operations using a separate backend."""
+        messages = [
+            LLMMessage(role=Role.system, content=system_prompt),
+            LLMMessage(role=Role.user, content=user_prompt),
+        ]
+        backend = self.backend_factory()
+        try:
+            active_model = self.config.get_active_model()
+            async with backend as b:
+                result = await b.complete(
+                    model=active_model,
+                    messages=messages,
+                    temperature=0.1,
+                    tools=None,
+                    max_tokens=500,
+                    tool_choice=None,
+                    extra_headers=None,
+                )
+            return result.message.content or ""
+        except Exception:
+            return ""
+
+    def _get_messages_for_backend(self) -> list[LLMMessage]:
+        """Return messages with ephemeral memory block injected for backend only.
+
+        self.messages is never modified — the memory block only exists in the
+        list returned to the backend, keeping it out of logs, UI, and persistence.
+        """
+        if not self.memory_manager.enabled:
+            return self.messages
+
+        memory_block = self.memory_manager.get_memory_block()
+        if not memory_block:
+            return self.messages
+
+        messages = list(self.messages)
+        memory_msg = LLMMessage(role=Role.system, content=memory_block)
+        messages.insert(1, memory_msg)
+        return messages
 
     def set_tool_permission(
         self, tool_name: str, permission: ToolPermission, save_permanently: bool = False
@@ -246,6 +327,9 @@ class AgentLoop:
                     ContextWarningMiddleware(0.5, self.config.auto_compact_threshold)
                 )
 
+        if self._base_config.memory.enabled:
+            self.middleware_pipeline.add(_MemoryObserverMiddleware(self.memory_manager))
+
         self.middleware_pipeline.add(PlanAgentMiddleware(lambda: self.agent_profile))
 
     async def _handle_middleware_result(
@@ -298,7 +382,13 @@ class AgentLoop:
             messages=self.messages, stats=self.stats, config=self.config
         )
 
+    def _ensure_memory_started(self) -> None:
+        """Idempotent: start memory write queue if enabled and not already running."""
+        if self.memory_manager.enabled:
+            self.memory_manager.start()
+
     async def _conversation_loop(self, user_msg: str) -> AsyncGenerator[BaseEvent]:
+        self._ensure_memory_started()
         user_message = LLMMessage(role=Role.user, content=user_msg)
         self.messages.append(user_message)
         self.stats.steps += 1
@@ -575,10 +665,11 @@ class AgentLoop:
 
         try:
             start_time = time.perf_counter()
+            backend_messages = self._get_messages_for_backend()
             async with self.backend as backend:
                 result = await backend.complete(
                     model=active_model,
-                    messages=self.messages,
+                    messages=backend_messages,
                     temperature=active_model.temperature,
                     tools=available_tools,
                     tool_choice=tool_choice,
@@ -622,10 +713,11 @@ class AgentLoop:
             start_time = time.perf_counter()
             usage = LLMUsage()
             chunk_agg = LLMChunk(message=LLMMessage(role=Role.assistant))
+            backend_messages = self._get_messages_for_backend()
             async with self.backend as backend:
                 async for chunk in backend.complete_streaming(
                     model=active_model,
-                    messages=self.messages,
+                    messages=backend_messages,
                     temperature=active_model.temperature,
                     tools=available_tools,
                     tool_choice=tool_choice,
@@ -816,6 +908,12 @@ class AgentLoop:
             )
         except ValueError:
             pass
+
+        if self.memory_manager.enabled:
+            try:
+                await self.memory_manager.on_session_end()
+            except Exception:
+                pass
 
         self.middleware_pipeline.reset()
         self.tool_manager.reset_all()

@@ -41,11 +41,22 @@ def run_programmatic(
                 "Loaded %d messages from previous session", len(non_system_messages)
             )
 
-        async for event in agent_loop.act(prompt):
-            formatter.on_event(event)
-            if isinstance(event, AssistantEvent) and event.stopped_by_middleware:
-                raise ConversationLimitException(event.content)
+        try:
+            async for event in agent_loop.act(prompt):
+                formatter.on_event(event)
+                if isinstance(event, AssistantEvent) and event.stopped_by_middleware:
+                    raise ConversationLimitException(event.content)
 
-        return formatter.finalize()
+            return formatter.finalize()
+        finally:
+            if agent_loop.memory_manager.enabled:
+                try:
+                    await agent_loop.memory_manager.on_session_end()
+                except Exception:
+                    logger.warning("Memory session end failed", exc_info=True)
+                try:
+                    await agent_loop.memory_manager.aclose()
+                except Exception:
+                    logger.warning("Memory close failed", exc_info=True)
 
     return asyncio.run(_async_run())

@@ -27,6 +27,7 @@ from vibe.core.paths.global_paths import (
     SESSION_LOG_DIR,
 )
 from vibe.core.prompts import SystemPrompt
+from vibe.core.memory.config import MemoryConfig
 from vibe.core.tools.base import BaseToolConfig
 
 
@@ -323,6 +324,7 @@ class VibeConfig(BaseSettings):
 
     project_context: ProjectContextConfig = Field(default_factory=ProjectContextConfig)
     session_logging: SessionLoggingConfig = Field(default_factory=SessionLoggingConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     tools: dict[str, BaseToolConfig] = Field(default_factory=dict)
     tool_paths: list[Path] = Field(
         default_factory=list,

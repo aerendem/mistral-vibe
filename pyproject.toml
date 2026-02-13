@@ -159,5 +159,6 @@ max-nested-blocks = 4
 ignore_decorators = ["@*"]
 
 [tool.pytest.ini_options]
-addopts = "-vvvv -q -n auto --durations=10 --import-mode=importlib --maxschedchunk=1"
+addopts = "-vvvv -q -n auto --durations=10 --import-mode=importlib --maxschedchunk=1 -m 'not live_llm'"
 timeout = 10
+markers = ["live_llm: requires real LLM API access (run with: uv run pytest -m live_llm -n0)"]

@@ -62,6 +62,11 @@ class CommandRegistry:
                 description="Display agent statistics",
                 handler="_show_status",
             ),
+            "memory": Command(
+                aliases=frozenset(["/memory"]),
+                description="Display current memory state",
+                handler="_show_memory",
+            ),
         }
 
         for command in excluded_commands:
@@ -87,6 +92,8 @@ class CommandRegistry:
             "- `Ctrl+G` Edit input in external editor",
             "- `Ctrl+O` Toggle tool output view",
             "- `Ctrl+T` Toggle todo view",
+            "- `Ctrl+Y` Toggle memory on/off",
+            "- `Ctrl+U` Show memory state",
             "- `Shift+Tab` Toggle auto-approve mode",
             "",
             "### Special Features",
