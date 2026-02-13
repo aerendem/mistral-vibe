@@ -79,6 +79,7 @@ coverage.xml
 cover/
 **/__snapshots__/
 *.snap
+snapshot_report.html
 
 # Translations
 *.mo
