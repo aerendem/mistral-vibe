@@ -169,6 +169,50 @@ def test_clear_observations(store: MemoryStore) -> None:
     assert len(store.get_pending_observations("user1")) == 0
 
 
+def test_clear_observations_removes_exact_processed_not_top_n(
+    store: MemoryStore,
+) -> None:
+    store.get_or_create_user_state("user1")
+    store.add_observation(
+        Observation(
+            user_id="user1",
+            context_key="ctx",
+            content="old_high",
+            importance=9,
+            source_role="user",
+        )
+    )
+    store.add_observation(
+        Observation(
+            user_id="user1",
+            context_key="ctx",
+            content="old_low",
+            importance=1,
+            source_role="user",
+        )
+    )
+
+    processed = store.get_pending_observations("user1", limit=2)
+
+    # New observation arrives after fetch with higher importance.
+    store.add_observation(
+        Observation(
+            user_id="user1",
+            context_key="ctx",
+            content="new_top",
+            importance=10,
+            source_role="user",
+        )
+    )
+
+    removed = store.clear_observations("user1", processed=processed)
+    assert removed == 2
+
+    remaining = store.get_pending_observations("user1", limit=10)
+    assert len(remaining) == 1
+    assert remaining[0].content == "new_top"
+
+
 def test_log_consolidation(store: MemoryStore) -> None:
     store.log_consolidation("project:x", "user1", 10, "old", "new")
     rows = store._conn.execute("SELECT * FROM consolidations").fetchall()

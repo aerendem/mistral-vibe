@@ -25,11 +25,11 @@ class MemoryInjector:
         ctx_mem = self._store.get_or_create_context_memory(context_key, user_id)
 
         # Build sections by priority (highest first — trimmed from bottom)
-        seed_section = escape(self._format_seed(state.seed))
-        fields_section = escape(self._format_fields(state.fields))
-        active_section = escape(self._format_short_term(ctx_mem.short_term))
-        knowledge_section = escape(ctx_mem.long_term.strip())
-        sensory_section = escape(self._format_sensory(ctx_mem.sensory))
+        seed_section = self._format_seed(state.seed)
+        fields_section = self._format_fields(state.fields)
+        active_section = self._format_short_term(ctx_mem.short_term)
+        knowledge_section = ctx_mem.long_term.strip()
+        sensory_section = self._format_sensory(ctx_mem.sensory)
 
         # Nothing to inject
         if not any([seed_section, fields_section, active_section, knowledge_section, sensory_section]):
@@ -65,12 +65,30 @@ class MemoryInjector:
         if remaining <= overhead:
             return remaining
 
-        trimmed = section[: remaining - overhead]
+        trimmed = MemoryInjector._escape_with_limit(section, remaining - overhead)
         if not trimmed:
             return remaining
 
         parts.append(f"<{tag}>{trimmed}</{tag}>")
         return remaining - (len(trimmed) + overhead)
+
+    @staticmethod
+    def _escape_with_limit(text: str, limit: int) -> str:
+        """Escape XML text while ensuring output never exceeds limit chars."""
+        if limit <= 0 or not text:
+            return ""
+        if "&" not in text and "<" not in text and ">" not in text:
+            return text[:limit]
+
+        out: list[str] = []
+        used = 0
+        for ch in text:
+            escaped = escape(ch)
+            if (next_used := used + len(escaped)) > limit:
+                break
+            out.append(escaped)
+            used = next_used
+        return "".join(out)
 
     @staticmethod
     def _format_seed(seed: Seed) -> str:

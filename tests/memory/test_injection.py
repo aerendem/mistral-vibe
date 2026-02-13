@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -129,6 +130,19 @@ def test_escapes_xml_content(injector: MemoryInjector, store: MemoryStore) -> No
     assert "&amp;" in result
     assert "<FastAPI>" not in result
     assert "<unsafe>" not in result
+
+
+def test_budget_truncation_keeps_xml_entities_valid(
+    injector: MemoryInjector, store: MemoryStore
+) -> None:
+    state = store.get_or_create_user_state("user1")
+    state.seed = Seed(user_model=("A&B<C>" * 200))
+    store.update_user_state(state)
+    store.get_or_create_context_memory("project:test", "user1")
+
+    result = injector.build_memory_block("user1", "project:test", budget_tokens=10)
+    assert result
+    ET.fromstring(result)  # should parse without broken entities
 
 
 # -- Sensory injection tests --

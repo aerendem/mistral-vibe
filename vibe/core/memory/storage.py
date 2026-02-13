@@ -4,6 +4,7 @@ import json
 import logging
 import sqlite3
 import threading
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -83,6 +84,51 @@ def _now_iso() -> str:
 
 class MemoryStore:
     """SQLite storage backend for the memory system."""
+
+    @staticmethod
+    def _observation_signature(
+        obs: Observation | dict[str, object]
+    ) -> tuple[str, str, str, int, str, str]:
+        if isinstance(obs, Observation):
+            created = obs.created_at
+            user_id = obs.user_id
+            context_key = obs.context_key
+            content = obs.content
+            importance = obs.importance
+            source_role = obs.source_role
+        else:
+            created_raw = obs.get("created_at")
+            match created_raw:
+                case datetime():
+                    created = created_raw
+                case str():
+                    created = datetime.fromisoformat(
+                        created_raw.replace("Z", "+00:00")
+                    )
+                case _:
+                    created = None
+            user_id = str(obs.get("user_id", ""))
+            context_key = str(obs.get("context_key", ""))
+            content = str(obs.get("content", ""))
+            importance = int(obs.get("importance", 0))
+            source_role = str(obs.get("source_role", ""))
+
+        created_key = ""
+        if created is not None:
+            created_key = (
+                created
+                if created.tzinfo is not None
+                else created.replace(tzinfo=UTC)
+            ).astimezone(UTC).isoformat(timespec="microseconds")
+
+        return (
+            user_id,
+            context_key,
+            content,
+            importance,
+            source_role,
+            created_key,
+        )
 
     def __init__(
         self,
@@ -249,8 +295,7 @@ class MemoryStore:
         """Remove pending observations.
 
         When processed is None, clears all observations for the user.
-        Otherwise removes the top-N observations by the same importance ordering
-        used by get_pending_observations (N=len(processed)).
+        Otherwise removes only the exact processed observations.
         Returns the number of removed observations.
         """
         with self._lock:
@@ -270,21 +315,18 @@ class MemoryStore:
                 removed = len(observations)
                 updated = []
             else:
-                remove_count = min(len(processed), len(observations))
-                ranked_indices = sorted(
-                    enumerate(observations),
-                    key=lambda item: item[1].get("importance", 0),
-                    reverse=True,
+                to_remove = Counter(
+                    self._observation_signature(obs) for obs in processed
                 )
-                to_remove_indices = {
-                    index for index, _ in ranked_indices[:remove_count]
-                }
-                updated = [
-                    obs
-                    for index, obs in enumerate(observations)
-                    if index not in to_remove_indices
-                ]
-                removed = len(observations) - len(updated)
+                updated = []
+                removed = 0
+                for obs in observations:
+                    signature = self._observation_signature(obs)
+                    if to_remove[signature] > 0:
+                        to_remove[signature] -= 1
+                        removed += 1
+                        continue
+                    updated.append(obs)
 
             if removed == 0:
                 return 0
